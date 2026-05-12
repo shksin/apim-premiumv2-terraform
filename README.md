@@ -193,9 +193,9 @@ terraform init
 
 This downloads the `azapi` and `azurerm` providers (versions pinned in [providers.tf](providers.tf)) and writes `.terraform.lock.hcl`.
 
-### One-shot deploy (recommended)
+### Deploy everything
 
-Because every dependency is captured in the graph, you can apply everything in one command and Terraform will sequence it correctly:
+Because every dependency is captured in the graph, a single apply deploys all three steps in the correct order:
 
 ```powershell
 terraform plan -out tfplan
@@ -204,119 +204,46 @@ terraform apply tfplan
 
 Total time: ~25–30 min (APIM PremiumV2 activation dominates).
 
-### Phased deploy (recommended when iterating)
-
-If you want to verify each layer before moving on, apply with `-target` flags. Targets accumulate — every subsequent step is a strict superset of the previous one.
-
-#### Step 1 — APIM with Internal VNet injection (~20–25 min)
+### Verify
 
 ```powershell
-terraform apply `
-  -target=azurerm_resource_group.rg `
-  -target=azurerm_virtual_network.vnet `
-  -target=azurerm_subnet.apim `
-  -target=azurerm_network_security_group.apim_nsg `
-  -target=azurerm_subnet_network_security_group_association.apim_nsg_assoc `
-  -target=azurerm_private_dns_zone.apim `
-  -target=azurerm_private_dns_zone_virtual_network_link.apim `
-  -target=azapi_resource.apim `
-  -target=azurerm_private_dns_a_record.apim_gateway `
-  -auto-approve
-```
-
-**Verify Step 1**:
-
-```powershell
-$sid = az account show --query id -o tsv
-az rest --method get `
-  --url "https://management.azure.com/subscriptions/$sid/resourceGroups/rg-apim-premiumv2/providers/Microsoft.ApiManagement/service/$(terraform output -raw apim_resource_id | Split-Path -Leaf)?api-version=2024-05-01" `
-  --query "{vnetType:properties.virtualNetworkType, publicNetworkAccess:properties.publicNetworkAccess, publicIPs:properties.publicIPAddresses, privateIPs:properties.privateIPAddresses}" -o json
-```
-
-Expected:
-
-```json
-{
-  "vnetType": "Internal",
-  "publicNetworkAccess": "Enabled",   // still public — Step 1b fixes this
-  "publicIPs": [],
-  "privateIPs": ["10.0.1.4"]
-}
-```
-
-#### Step 1b — Lock down the management plane (~6 min)
-
-```powershell
-terraform apply `
-  -target=azurerm_subnet.pe `
-  -target=azurerm_private_endpoint.apim_mgmt `
-  -target=azapi_update_resource.apim_disable_public `
-  -auto-approve
-```
-
-The `depends_on` in `azapi_update_resource.apim_disable_public` forces the PE to exist and be `Approved` before the PATCH runs.
-
-**Verify Step 1b**:
-
-```powershell
-$sid = az account show --query id -o tsv
-$rid = terraform output -raw apim_resource_id
+$sid  = az account show --query id -o tsv
+$rid  = terraform output -raw apim_resource_id
 $apim = az rest --method get --url "https://management.azure.com$rid?api-version=2024-05-01" -o json | ConvertFrom-Json
+
 [pscustomobject]@{
   vnetType            = $apim.properties.virtualNetworkType
   publicNetworkAccess = $apim.properties.publicNetworkAccess
+  privateIPs          = $apim.properties.privateIPAddresses -join ","
+  publicIPs           = ($apim.properties.publicIPAddresses -join ",") | ForEach-Object { if ($_ -eq "") { "(none)" } else { $_ } }
   peCount             = ($apim.properties.privateEndpointConnections | Measure-Object).Count
   peState             = $apim.properties.privateEndpointConnections[0].properties.privateLinkServiceConnectionState.status
 } | Format-List
-```
 
-Expected:
-
-```
-vnetType            : Internal
-publicNetworkAccess : Disabled
-peCount             : 1
-peState             : Approved
-```
-
-#### Step 2 — Import the Petstore API + attach policy (~30 sec)
-
-```powershell
-terraform apply `
-  -target=azapi_resource.petstore_api `
-  -target=azapi_resource.petstore_api_policy `
-  -auto-approve
-```
-
-**Why this is fully self-contained**: the OpenAPI spec is read from the local [petstore-openapi.json](petstore-openapi.json) file and inlined into the ARM request body (`format = "openapi+json"`, not `openapi+json-link`). The APIM resource provider never has to call `petstore3.swagger.io` — the import works even if that site is down or unreachable, and the API definition is pinned in source control. To refresh the spec, replace `petstore-openapi.json` and re-apply.
-
-**Verify Step 2**:
-
-```powershell
-$sid = az account show --query id -o tsv
-$rid = terraform output -raw apim_resource_id
-
-# API is registered
+# Petstore API + policy
 az rest --method get --url "https://management.azure.com$rid/apis/petstore?api-version=2024-05-01" `
   --query "{name:name, path:properties.path, subscriptionRequired:properties.subscriptionRequired, protocols:properties.protocols}" -o json
 
-# Policy is attached
 az rest --method get --url "https://management.azure.com$rid/apis/petstore/policies/policy?api-version=2024-05-01" `
   --query "properties.value" -o tsv
 ```
 
-Expected: `subscriptionRequired = true`, `protocols = ["https"]`, and the policy XML matches [policy.xml](policy.xml).
+Expected APIM state:
 
-#### Final reconciliation
-
-After the targeted applies, run a plain `terraform apply` once. It should report **`No changes`** — proof that the phased path landed in the same state as the one-shot deploy.
-
-```powershell
-terraform apply
-# Expected: Apply complete! Resources: 0 added, 0 changed, 0 destroyed.
+```
+vnetType            : Internal
+publicNetworkAccess : Disabled
+privateIPs          : 10.0.1.4
+publicIPs           : (none)
+peCount             : 1
+peState             : Approved
 ```
 
-**Call the API from inside the VNet** (jumpbox / bastion / peered VNet):
+And `subscriptionRequired = true`, `protocols = ["https"]` on the petstore API.
+
+### Call the API (from inside the VNet)
+
+From a jumpbox, bastion, or peered VNet:
 
 ```powershell
 # Without a subscription key — expect HTTP 401
