@@ -23,3 +23,7 @@ override.tf.json
 
 # Ad-hoc REST payloads
 body.json
+
+# Terraform plan binaries
+tfplan*
+*.tfplan
