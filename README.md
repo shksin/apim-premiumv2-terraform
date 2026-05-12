@@ -28,6 +28,13 @@ After both steps the service has **no public ingress** — gateway, management A
 | `azurerm_private_endpoint.apim_mgmt` | PE on APIM with `subresource = Gateway`; auto-registers all hostnames into the existing private DNS zone |
 | `azapi_update_resource.apim_disable_public` | PATCH that flips `properties.publicNetworkAccess = "Disabled"` |
 
+### Step 2 — Import an API + attach policy ([step2-import-api-with-policies.tf](step2-import-api-with-policies.tf))
+
+| Resource | Purpose |
+|---|---|
+| `azapi_resource.petstore_api` | Imports the public Petstore OpenAPI 3.0 spec as the `petstore` API; `subscriptionRequired = true`, HTTPS only |
+| `azapi_resource.petstore_api_policy` | Attaches [policy.xml](policy.xml) at the API scope: rate-limit (10 calls / 60s), correlation-ID header, subscription-key stripping on backend, response header |
+
 ---
 
 ## Why Step 1b is required
@@ -217,6 +224,47 @@ peCount             : 1
 peState             : Approved
 ```
 
+### Step 2 — Import the Petstore API and attach the policy
+
+```powershell
+terraform apply `
+  -target=azapi_resource.petstore_api `
+  -target=azapi_resource.petstore_api_policy `
+  -auto-approve
+```
+
+Takes ~30 seconds.
+
+**Why this works even though APIM is private**: the spec import is a *management-plane* operation. Terraform calls ARM (`management.azure.com`), which routes the request to the APIM resource provider (a Microsoft-managed service on the Azure backbone). The RP fetches `petstore3.swagger.io` itself — the download never traverses your VNet or the NSG `DenyInternetOutbound` rule. The `publicNetworkAccess = Disabled` flag only blocks inbound calls to your APIM's own management endpoint (`*.management.azure-api.net`); it does not affect ARM → RP control-plane flow.
+
+**Verify Step 2**:
+
+```powershell
+$sid = az account show --query id -o tsv
+$rid = terraform output -raw apim_resource_id
+
+# API is registered
+az rest --method get --url "https://management.azure.com$rid/apis/petstore?api-version=2024-05-01" `
+  --query "{name:name, path:properties.path, subscriptionRequired:properties.subscriptionRequired, protocols:properties.protocols}" -o json
+
+# Policy is attached
+az rest --method get --url "https://management.azure.com$rid/apis/petstore/policies/policy?api-version=2024-05-01" `
+  --query "properties.value" -o tsv
+```
+
+Expected: `subscriptionRequired = true`, `protocols = ["https"]`, and the policy XML matches [policy.xml](policy.xml).
+
+**Call it from inside the VNet** (jumpbox / bastion / peered VNet):
+
+```powershell
+# Without a subscription key — expect HTTP 401
+curl https://apim-premiumv2-ss-26a.azure-api.net/petstore/pet/findByStatus?status=available
+
+# With a subscription key from the APIM "All APIs" subscription
+$key = az rest --method post --url "https://management.azure.com$rid/subscriptions/master/listSecrets?api-version=2024-05-01" --query primaryKey -o tsv
+curl -H "Ocp-Apim-Subscription-Key: $key" https://apim-premiumv2-ss-26a.azure-api.net/petstore/pet/findByStatus?status=available
+```
+
 ---
 
 ## Resulting network exposure
@@ -239,6 +287,8 @@ Outbound from APIM is restricted by the NSG to `Storage`, `AzureKeyVault`, and `
 - **`ActivateServiceWithPrivateEndpointAccessNotAllowed`** at create time → you tried to set `publicNetworkAccess=Disabled` on create. It must be a post-create PATCH after the PE exists. (This is exactly what Step 1b handles.)
 - **Cannot resolve `*.azure-api.net` from a peered VNet** → you must link the `azure-api.net` private DNS zone to that VNet too.
 - **PE creation fails with subnet error** → the APIM subnet has a delegation, which is incompatible with PEs. The PE goes into the dedicated `snet-apim-pe` subnet, not the APIM subnet.
+- **Spec import succeeded but I expected the NSG to block it** → spec download is performed by the APIM resource provider on the Azure backbone, not by your APIM gateway. The NSG only governs runtime traffic from `snet-apim`, so management-plane imports always succeed regardless of egress rules.
+- **Calls to `/petstore/*` return HTTP 401 even from inside the VNet** → `subscriptionRequired = true` is enforced. Send `Ocp-Apim-Subscription-Key: <key>` (the policy strips it before forwarding to the backend, so the backend never sees it).
 
 ---
 
@@ -278,4 +328,11 @@ APIM destroy takes ~10–20 min. The resource group and all networking are remov
 
 **ARM REST reference**
 - [`Microsoft.ApiManagement/service` (2024-05-01)](https://learn.microsoft.com/azure/templates/microsoft.apimanagement/service?pivots=deployment-language-arm-template) — schema for `virtualNetworkType`, `virtualNetworkConfiguration`, `publicNetworkAccess`, `zones`
+
+**API import & policies (Step 2)**
+- [Import an API into Azure API Management](https://learn.microsoft.com/azure/api-management/import-and-publish)
+- [How to set or edit Azure API Management policies](https://learn.microsoft.com/azure/api-management/set-edit-policies)
+- [API Management policy reference](https://learn.microsoft.com/azure/api-management/api-management-policies)
+- [`rate-limit` policy](https://learn.microsoft.com/azure/api-management/rate-limit-policy)
+- [Subscriptions in Azure API Management](https://learn.microsoft.com/azure/api-management/api-management-subscriptions)
 

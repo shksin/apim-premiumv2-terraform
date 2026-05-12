@@ -1,0 +1,32 @@
+<policies>
+  <inbound>
+    <base />
+
+    <!-- Rate limit: 10 calls per 60 seconds per subscription key -->
+    <rate-limit calls="10" renewal-period="60" />
+
+    <!-- Set a correlation ID header for tracing -->
+    <set-header name="X-Correlation-Id" exists-action="skip">
+      <value>@(Guid.NewGuid().ToString())</value>
+    </set-header>
+
+    <!-- Remove the subscription key header before forwarding to backend -->
+    <set-header name="Ocp-Apim-Subscription-Key" exists-action="delete" />
+
+  </inbound>
+  <backend>
+    <base />
+  </backend>
+  <outbound>
+    <base />
+
+    <!-- Add response header indicating the serving environment -->
+    <set-header name="X-Environment" exists-action="override">
+      <value>production</value>
+    </set-header>
+
+  </outbound>
+  <on-error>
+    <base />
+  </on-error>
+</policies>
