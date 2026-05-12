@@ -66,7 +66,7 @@ The `publicNetworkAccess = "Disabled"` flag **cannot be set at create time**. AP
 ActivateServiceWithPrivateEndpointAccessNotAllowed
 ```
 
-Microsoft's documented behavior: *"You can disable public network access in an existing API Management instance, not during the deployment process."* It also requires a Private Endpoint to be in place first — otherwise APIM refuses to disable public access because it would orphan the management API.
+Microsoft's documented behavior: *"You can disable public network access in an existing API Management instance, not during the deployment process."* ([learn.microsoft.com/azure/api-management/private-endpoint#optionally-disable-public-network-access](https://learn.microsoft.com/azure/api-management/private-endpoint#optionally-disable-public-network-access)) It also requires a Private Endpoint to be in place first — otherwise APIM refuses to disable public access because it would orphan the management API.
 
 Order of operations is therefore mandatory and enforced via `depends_on` in Terraform:
 
@@ -302,7 +302,7 @@ APIM destroy takes ~10–20 min. The resource group and all networking are remov
 
 **Private Endpoint & public network access**
 - [Connect privately to API Management with a Private Endpoint](https://learn.microsoft.com/azure/api-management/private-endpoint)
-- [Disable public network access to API Management](https://learn.microsoft.com/azure/api-management/private-endpoint#disable-public-network-access) — documents that this can only be done after creation
+- [Disable public network access to API Management](https://learn.microsoft.com/azure/api-management/private-endpoint#optionally-disable-public-network-access) — documents that this can only be done after creation
 - [Azure Private Endpoint overview](https://learn.microsoft.com/azure/private-link/private-endpoint-overview)
 - [Private Endpoint DNS configuration](https://learn.microsoft.com/azure/private-link/private-endpoint-dns)
 
