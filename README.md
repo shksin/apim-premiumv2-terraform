@@ -32,7 +32,7 @@ After both steps the service has **no public ingress** — gateway, management A
 
 | Resource | Purpose |
 |---|---|
-| `azapi_resource.petstore_api` | Imports the public Petstore OpenAPI 3.0 spec as the `petstore` API; `subscriptionRequired = true`, HTTPS only |
+| `azapi_resource.petstore_api` | Imports the bundled [petstore-openapi.json](petstore-openapi.json) (OpenAPI 3.0) as the `petstore` API; `subscriptionRequired = true`, HTTPS only. The spec is read from disk and inlined into the ARM request — no internet fetch. |
 | `azapi_resource.petstore_api_policy` | Attaches [policy.xml](policy.xml) at the API scope: rate-limit (10 calls / 60s), correlation-ID header, subscription-key stripping on backend, response header |
 
 ---
@@ -235,7 +235,7 @@ terraform apply `
 
 Takes ~30 seconds.
 
-**Why this works even though APIM is private**: the spec import is a *management-plane* operation. Terraform calls ARM (`management.azure.com`), which routes the request to the APIM resource provider (a Microsoft-managed service on the Azure backbone). The RP fetches `petstore3.swagger.io` itself — the download never traverses your VNet or the NSG `DenyInternetOutbound` rule. The `publicNetworkAccess = Disabled` flag only blocks inbound calls to your APIM's own management endpoint (`*.management.azure-api.net`); it does not affect ARM → RP control-plane flow.
+**Why this is fully self-contained**: the OpenAPI spec is read from the local [petstore-openapi.json](petstore-openapi.json) file and inlined into the ARM request body (`format = "openapi+json"`, not `openapi+json-link`). The APIM resource provider never has to call `petstore3.swagger.io` — the import works even if that site is down or unreachable, and the API definition is pinned in source control. To refresh the spec, replace `petstore-openapi.json` and re-apply.
 
 **Verify Step 2**:
 
