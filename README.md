@@ -140,6 +140,50 @@ Other knobs in [variables.tf](variables.tf): `location`, `resource_group_name`, 
 
 ## Deploy
 
+### How the steps depend on each other
+
+Terraform builds an internal dependency graph from references between resources (`<a>.id`, `<a>.name`, etc.) and from explicit `depends_on` blocks. The three "steps" in this repo are split across `.tf` files for **readability** — Terraform itself treats them as a single graph. The dependency chain is:
+
+```
+azurerm_resource_group.rg
+  └─► azurerm_virtual_network.vnet
+        ├─► azurerm_subnet.apim ──► azurerm_network_security_group.apim_nsg
+        │                              └─► azurerm_subnet_network_security_group_association.apim_nsg_assoc
+        │
+        ├─► azurerm_private_dns_zone.apim
+        │     └─► azurerm_private_dns_zone_virtual_network_link.apim
+        │
+        └─► azurerm_subnet.pe                                 ─┐  (Step 1b)
+                                                                │
+   ┌───────── Step 1 ─────────┐                                 │
+   │ azapi_resource.apim      │── needs subnet + NSG + DNS zone │
+   │  (Internal VNet inject)  │                                 │
+   └───────────┬──────────────┘                                 │
+               │                                                │
+               ├─► azurerm_private_dns_a_record.apim_gateway    │
+               │                                                │
+               ├─► azurerm_private_endpoint.apim_mgmt ◄─────────┘
+               │     (PE on Gateway sub-resource, into snet-apim-pe)
+               │
+               ├─► azapi_update_resource.apim_disable_public   (Step 1b — PATCH publicNetworkAccess)
+               │     depends_on = [azurerm_private_endpoint.apim_mgmt]
+               │
+               ├─► azapi_resource.petstore_api                (Step 2 — import OpenAPI)
+               │     depends_on = [azapi_resource.apim]
+               │
+               └─► azapi_resource.petstore_api_policy         (Step 2 — attach policy.xml)
+                     depends_on = [azapi_resource.petstore_api]
+```
+
+Key ordering rules enforced by `depends_on`:
+
+| Edge | Why |
+|---|---|
+| `apim_disable_public` → `apim_mgmt` (PE) | Azure refuses `publicNetworkAccess=Disabled` until a Private Endpoint exists. Without this edge Terraform might run them in parallel and the PATCH would fail. |
+| `petstore_api` → `apim` | API child resources can't be created before the parent APIM service is fully provisioned. |
+| `petstore_api_policy` → `petstore_api` | Policy is a child of the API. |
+| `apim` → `nsg_assoc`, `dns_link`, `subnet` | APIM creation validates the subnet, its NSG, and that the private DNS zone is linked to the VNet **before** activation. Missing any of these causes a long-running create to fail late. |
+
 ### Step 0 — Init
 
 ```powershell
@@ -147,13 +191,26 @@ cd apim-premiumv2
 terraform init
 ```
 
-### Step 1 — APIM with VNet injection
+This downloads the `azapi` and `azurerm` providers (versions pinned in [providers.tf](providers.tf)) and writes `.terraform.lock.hcl`.
+
+### One-shot deploy (recommended)
+
+Because every dependency is captured in the graph, you can apply everything in one command and Terraform will sequence it correctly:
 
 ```powershell
-# Plan only (optional)
-terraform plan -target=azapi_resource.apim
+terraform plan -out tfplan
+terraform apply tfplan
+```
 
-# Full apply for Step 1 — the APIM creation alone takes ~20–25 min
+Total time: ~25–30 min (APIM PremiumV2 activation dominates).
+
+### Phased deploy (recommended when iterating)
+
+If you want to verify each layer before moving on, apply with `-target` flags. Targets accumulate — every subsequent step is a strict superset of the previous one.
+
+#### Step 1 — APIM with Internal VNet injection (~20–25 min)
+
+```powershell
 terraform apply `
   -target=azurerm_resource_group.rg `
   -target=azurerm_virtual_network.vnet `
@@ -166,8 +223,6 @@ terraform apply `
   -target=azurerm_private_dns_a_record.apim_gateway `
   -auto-approve
 ```
-
-Or simply `terraform apply -auto-approve` to do Step 1 + Step 1b in one go (Terraform will order them correctly via `depends_on`).
 
 **Verify Step 1**:
 
@@ -189,7 +244,7 @@ Expected:
 }
 ```
 
-### Step 1b — Lock down the management plane
+#### Step 1b — Lock down the management plane (~6 min)
 
 ```powershell
 terraform apply `
@@ -199,7 +254,7 @@ terraform apply `
   -auto-approve
 ```
 
-Takes ~2 min for the PE + ~4 min for the PATCH.
+The `depends_on` in `azapi_update_resource.apim_disable_public` forces the PE to exist and be `Approved` before the PATCH runs.
 
 **Verify Step 1b**:
 
@@ -224,7 +279,7 @@ peCount             : 1
 peState             : Approved
 ```
 
-### Step 2 — Import the Petstore API and attach the policy
+#### Step 2 — Import the Petstore API + attach policy (~30 sec)
 
 ```powershell
 terraform apply `
@@ -232,8 +287,6 @@ terraform apply `
   -target=azapi_resource.petstore_api_policy `
   -auto-approve
 ```
-
-Takes ~30 seconds.
 
 **Why this is fully self-contained**: the OpenAPI spec is read from the local [petstore-openapi.json](petstore-openapi.json) file and inlined into the ARM request body (`format = "openapi+json"`, not `openapi+json-link`). The APIM resource provider never has to call `petstore3.swagger.io` — the import works even if that site is down or unreachable, and the API definition is pinned in source control. To refresh the spec, replace `petstore-openapi.json` and re-apply.
 
@@ -254,7 +307,16 @@ az rest --method get --url "https://management.azure.com$rid/apis/petstore/polic
 
 Expected: `subscriptionRequired = true`, `protocols = ["https"]`, and the policy XML matches [policy.xml](policy.xml).
 
-**Call it from inside the VNet** (jumpbox / bastion / peered VNet):
+#### Final reconciliation
+
+After the targeted applies, run a plain `terraform apply` once. It should report **`No changes`** — proof that the phased path landed in the same state as the one-shot deploy.
+
+```powershell
+terraform apply
+# Expected: Apply complete! Resources: 0 added, 0 changed, 0 destroyed.
+```
+
+**Call the API from inside the VNet** (jumpbox / bastion / peered VNet):
 
 ```powershell
 # Without a subscription key — expect HTTP 401
