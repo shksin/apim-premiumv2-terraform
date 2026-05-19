@@ -1,13 +1,16 @@
 # ═══════════════════════════════════════════════════════════════
-# Step 1 — APIM Premium v2 with VNet Injection (Internal mode)
+# Stage 1 — APIM Premium v2 with VNet Injection (Internal mode)
+#                    + Management plane lockdown
 #
-# Creates:
+# Resources:
 #   - Resource group
 #   - VNet + APIM subnet (delegated to Microsoft.Web/hostingEnvironments)
 #   - NSG (allows APIM dependencies, denies all internet outbound)
 #   - Private DNS zone (azure-api.net) linked to the VNet
-#   - APIM Premium v2 instance (Internal VNet injection, public access disabled)
+#   - APIM Premium v2 (Internal VNet injection)
 #   - Private DNS A record mapping gateway hostname to APIM private VIP
+#   - Private Endpoint subnet + management-plane Private Endpoint
+#   - publicNetworkAccess = Disabled on APIM
 # ═══════════════════════════════════════════════════════════════
 
 # ── Resource Group ───────────────────────────────────────────
@@ -25,10 +28,6 @@ resource "azurerm_virtual_network" "vnet" {
 }
 
 # ── APIM Subnet ──────────────────────────────────────────────
-# Premium v2 VNet injection requirements:
-#   - Delegation to Microsoft.Web/hostingEnvironments
-#   - Minimum /27, recommended /24
-#   - Dedicated to a single APIM instance
 resource "azurerm_subnet" "apim" {
   name                 = var.apim_subnet_name
   resource_group_name  = azurerm_resource_group.rg.name
@@ -47,15 +46,11 @@ resource "azurerm_subnet" "apim" {
 }
 
 # ── NSG ──────────────────────────────────────────────────────
-# Required rules for Premium v2 internal VNet injection.
-# Allows APIM hard dependencies (Storage, Key Vault) and VNet-internal
-# traffic. Denies all internet outbound — no public egress.
 resource "azurerm_network_security_group" "apim_nsg" {
   name                = "nsg-apim"
   location            = azurerm_resource_group.rg.location
   resource_group_name = azurerm_resource_group.rg.name
 
-  # ── Inbound ──────────────────────────────────────────────
   security_rule {
     name                       = "AllowVnetInboundHTTPS"
     priority                   = 100
@@ -68,7 +63,6 @@ resource "azurerm_network_security_group" "apim_nsg" {
     destination_address_prefix = "VirtualNetwork"
   }
 
-  # ── Outbound ─────────────────────────────────────────────
   security_rule {
     name                       = "AllowStorageOutbound"
     priority                   = 100
@@ -124,7 +118,6 @@ resource "azurerm_subnet_network_security_group_association" "apim_nsg_assoc" {
 }
 
 # ── Private DNS Zone ─────────────────────────────────────────
-# Mandatory for Internal VNet injection — APIM has no public DNS entry.
 resource "azurerm_private_dns_zone" "apim" {
   name                = "azure-api.net"
   resource_group_name = azurerm_resource_group.rg.name
@@ -139,11 +132,6 @@ resource "azurerm_private_dns_zone_virtual_network_link" "apim" {
 }
 
 # ── APIM Premium v2 ──────────────────────────────────────────
-# Uses azapi — azurerm does not support PremiumV2 SKU.
-# API version 2024-05-01 is the latest GA that supports PremiumV2.
-#
-# VNet injection is immutable — cannot be changed after deployment.
-# To change VNet settings you must destroy and redeploy.
 resource "azapi_resource" "apim" {
   type      = "Microsoft.ApiManagement/service@2024-05-01"
   name      = var.apim_name
@@ -159,19 +147,12 @@ resource "azapi_resource" "apim" {
       publisherEmail = var.publisher_email
       publisherName  = var.publisher_name
 
-      # Internal = private inbound only — gateway not reachable from internet
       virtualNetworkType = "Internal"
       virtualNetworkConfiguration = {
         subnetResourceId = azurerm_subnet.apim.id
       }
-
-      # Note: publicNetworkAccess cannot be "Disabled" at creation time
-      # (APIM rejects with ActivateServiceWithPrivateEndpointAccessNotAllowed).
-      # Leave as default (Enabled) at create; disable post-create via a
-      # separate update or portal if you also want to lock the management plane.
     }
     },
-    # Availability Zones require capacity >= 3 on PremiumV2
     var.apim_sku_capacity >= 3 && length(var.availability_zones) > 0 ? { zones = var.availability_zones } : {}
   )
 
@@ -187,9 +168,7 @@ resource "azapi_resource" "apim" {
   }
 }
 
-# ── Private DNS A Record ─────────────────────────────────────
-# Maps the gateway hostname to the APIM private VIP so that
-# consumers within the VNet (or peered VNets) can resolve it.
+# ── Private DNS A Record for the gateway ─────────────────────
 resource "azurerm_private_dns_a_record" "apim_gateway" {
   name                = var.apim_name
   zone_name           = azurerm_private_dns_zone.apim.name

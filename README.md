@@ -1,327 +1,156 @@
-# APIM Premium v2 + Private Endpoint Lockdown — Terraform
+# APIM Premium v2 — staged Terraform deployment
 
-End-to-end setup for Azure API Management **Premium v2** with **Internal VNet injection** (Step 1) and a follow-up **management-plane lockdown via Private Endpoint** (Step 1b).
-
-After both steps the service has **no public ingress** — gateway, management API, dev portal, SCM, and configuration endpoints are all reachable only from inside the VNet.
-
----
-
-## What gets deployed
-
-### Step 1 — APIM with VNet injection ([main.tf](main.tf))
-
-| Resource | Purpose |
-|---|---|
-| `azurerm_resource_group.rg` | Container for everything |
-| `azurerm_virtual_network.vnet` | `10.0.0.0/16` |
-| `azurerm_subnet.apim` | `10.0.1.0/24`, delegated to `Microsoft.Web/hostingEnvironments` (PremiumV2 requirement) |
-| `azurerm_network_security_group.apim_nsg` | Allows VNet inbound 443, allows outbound to `Storage` / `AzureKeyVault` / `VirtualNetwork`, **denies** outbound to `Internet` |
-| `azurerm_private_dns_zone.apim` | `azure-api.net`, linked to the VNet |
-| `azapi_resource.apim` | The APIM service (`PremiumV2`, capacity 3, `virtualNetworkType = Internal`) |
-| `azurerm_private_dns_a_record.apim_gateway` | Maps `<name>.azure-api.net` → APIM private VIP |
-
-### Step 1b — Management plane lockdown ([step1b_pe_lockdown.tf](step1b_pe_lockdown.tf))
-
-| Resource | Purpose |
-|---|---|
-| `azurerm_subnet.pe` | `10.0.2.0/27`, no delegation, used for Private Endpoints |
-| `azurerm_private_endpoint.apim_mgmt` | PE on APIM with `subresource = Gateway`; auto-registers all hostnames into the existing private DNS zone |
-| `azapi_update_resource.apim_disable_public` | PATCH that flips `properties.publicNetworkAccess = "Disabled"` |
-
-### Step 2 — Import an API + attach policy ([step2-import-api-with-policies.tf](step2-import-api-with-policies.tf))
-
-| Resource | Purpose |
-|---|---|
-| `azapi_resource.petstore_api` | Imports the bundled [petstore-openapi.json](petstore-openapi.json) (OpenAPI 3.0) as the `petstore` API; `subscriptionRequired = true`, HTTPS only. The spec is read from disk and inlined into the ARM request — no internet fetch. |
-| `azapi_resource.petstore_api_policy` | Attaches [policy.xml](policy.xml) at the API scope: rate-limit (10 calls / 60s), correlation-ID header, subscription-key stripping on backend, response header |
-
----
-
-## Why Step 1b is required
-
-**Step 1 alone does not fully block public access.** Internal VNet injection only removes the **gateway's** public IP. The **management plane** of every APIM instance — the management REST API, the developer portal, the SCM/Git endpoint, and the configuration endpoint — remains reachable over the public internet by default, regardless of `virtualNetworkType`.
-
-After Step 1, querying the resource shows:
+Three **independent** Terraform root modules. Each has its own state file in
+Azure Storage, its own variables, and is meant to run in its own pipeline.
 
 ```
-vnetType            : Internal       ← gateway is private
-publicNetworkAccess : Enabled        ← management plane is still public
-publicIPs           : []
-privateIPs          : ["10.0.1.4"]
+apim-premiumv2-private/         # platform: APIM + VNet + management lockdown
+import-api-with-policies/       # import Petstore REST API + policy
+import-mcp-from-app-service/    # import REST API from App Service + expose as MCP server
 ```
 
-Anyone on the internet can still hit `https://<apim>.management.azure-api.net`, the developer portal at `https://<apim>.developer.azure-api.net`, and the SCM endpoint. Authentication is required, but the surface is exposed and counts against most "no public ingress" compliance baselines (CIS, Azure Security Benchmark, internal Zero Trust policies).
+## Coupling model
 
-**Step 1b closes that gap** by:
-
-1. Creating an undelegated subnet for Private Endpoints (the APIM subnet has a `Microsoft.Web/hostingEnvironments` delegation, which is incompatible with PEs).
-2. Creating a Private Endpoint with `subresource = Gateway`. This single PE projects **all** APIM hostnames (gateway, management, scm, portal, developer, configuration) onto a NIC inside the VNet, and auto-registers them in the `azure-api.net` private DNS zone.
-3. PATCHing `properties.publicNetworkAccess = "Disabled"` on the APIM resource. After this, the management plane is reachable **only** through the Private Endpoint.
-
-### Why it can't be done in a single step
-
-The `publicNetworkAccess = "Disabled"` flag **cannot be set at create time**. APIM rejects it with:
-
-```
-ActivateServiceWithPrivateEndpointAccessNotAllowed
-```
-
-Microsoft's documented behavior: *"You can disable public network access in an existing API Management instance, not during the deployment process."* ([learn.microsoft.com/azure/api-management/private-endpoint#optionally-disable-public-network-access](https://learn.microsoft.com/azure/api-management/private-endpoint#optionally-disable-public-network-access)) It also requires a Private Endpoint to be in place first — otherwise APIM refuses to disable public access because it would orphan the management API.
-
-Order of operations is therefore mandatory and enforced via `depends_on` in Terraform:
-
-1. Create APIM with Internal VNet injection — gateway becomes private, management plane stays public (`publicNetworkAccess=Enabled`).
-2. Create the PE subnet + Private Endpoint (`subresource = Gateway`).
-3. PATCH `publicNetworkAccess = Disabled` once the PE is `Approved`.
-
-That's why Step 1b is a separate file ([step1b_pe_lockdown.tf](step1b_pe_lockdown.tf)) and uses `azapi_update_resource` rather than baking the flag into the original `azapi_resource.apim` body.
-
-### What Step 1b buys you
-
-| Surface | After Step 1 only | After Step 1b |
-|---|---|---|
-| Gateway (`*.azure-api.net`) | Private | Private |
-| Management API (`*.management.azure-api.net`) | **Public** | Private only |
-| Developer portal | **Public** | Private only |
-| SCM / configuration endpoints | **Public** | Private only |
-| Private Endpoint connections | 0 | 1 (Approved) |
-| `publicNetworkAccess` | `Enabled` | **`Disabled`** |
-
----
-
-## Why these specific design choices
-
-| Choice | Reason |
-|---|---|
-| `azapi` for the APIM resource | The `azurerm` `api_management` resource does not support the `PremiumV2` SKU. |
-| `Microsoft.ApiManagement/service@2024-05-01` | Latest GA API version that supports PremiumV2. |
-| `virtualNetworkType = "Internal"` | Removes the public IP from the gateway. `External` would keep one. |
-| `capacity = 3` | Required for Availability Zones on PremiumV2 (also enforced by a `validation` block). |
-| `zones` set conditionally via `merge()` | Some subscriptions/regions don't expose AZs for PremiumV2 yet. The config falls back gracefully when `availability_zones = []`. |
-| Subnet delegation `Microsoft.Web/hostingEnvironments` | Required by the PremiumV2 platform. |
-| NSG `DenyInternetOutbound` | Locks down arbitrary outbound; allows only the dependencies APIM actually needs. |
-| Private DNS zone `azure-api.net` linked to the VNet | Mandatory for Internal mode — otherwise nothing inside the VNet can resolve the gateway hostname. |
-| PE subnet separate from the APIM subnet (`10.0.2.0/27`) | The APIM subnet has a delegation, which is incompatible with Private Endpoints. PEs need an undelegated subnet. |
-| PE `subresource_names = ["Gateway"]` | This single subresource exposes **all** APIM hostnames (gateway, management, scm, portal, developer, configuration) over the same PE. |
-| `azapi_update_resource` for `publicNetworkAccess` | Decouples the post-create PATCH from the original `azapi_resource` body so the create call doesn't get rejected. |
-
----
-
-## Prerequisites
-
-- Terraform **>= 1.5** ([install](https://developer.hashicorp.com/terraform/install))
-- Azure CLI **>= 2.60** and an authenticated session (`az login`)
-- Subscription with the `Microsoft.ApiManagement` provider registered:
-  ```powershell
-  az provider register --namespace Microsoft.ApiManagement
-  ```
-- A globally unique APIM name (DNS rule: `<name>.azure-api.net` must be free)
-- Permission to create RGs, VNets, NSGs, Private DNS zones, Private Endpoints, and APIM services in the target subscription
-- A region where **PremiumV2** is available (e.g. `australiaeast`, `eastus2`, `westus2`, `uksouth`, `swedencentral`)
-
----
-
-## Configuration
-
-Edit [terraform.tfvars](terraform.tfvars):
+`import-api-with-policies` and `import-mcp-from-app-service` do **not** read
+`apim-premiumv2-private`'s state. They locate APIM by constructing its ARM ID
+deterministically from inputs:
 
 ```hcl
-apim_name          = "apim-premiumv2-ss-26a"      # globally unique
-publisher_email    = "you@example.com"
-publisher_name     = "Your Name"
-
-# Optional — leave [] if your subscription doesn't expose PremiumV2 AZs
-availability_zones = []
+locals {
+  apim_id = "/subscriptions/${var.subscription_id}/resourceGroups/${var.resource_group_name}/providers/Microsoft.ApiManagement/service/${var.apim_name}"
+}
 ```
 
-Other knobs in [variables.tf](variables.tf): `location`, `resource_group_name`, `vnet_address_space`, `apim_subnet_prefix`, `pe_subnet_prefix`.
+So in CI/CD you just pass `subscription_id`, `resource_group_name`, `apim_name`
+as variables to the downstream modules (typically captured from
+`apim-premiumv2-private`'s `terraform output -json`).
 
----
+## One-time prerequisites
 
-## Deploy
+1. **Azure Storage account for Terraform state** (one storage account, one
+   container, three different keys):
+   ```pwsh
+   az group create -n rg-tfstate -l australiaeast
+   az storage account create -n sttfstateapimpremv2 -g rg-tfstate -l australiaeast --sku Standard_LRS
+   az storage container create -n tfstate --account-name sttfstateapimpremv2 --auth-mode login
+   ```
+2. **Service principal / managed identity** with Contributor (or finer) on the
+   target subscription + Storage Blob Data Contributor on the state container.
 
-### How the steps depend on each other
+## Per-module CI/CD pattern
 
-Terraform builds an internal dependency graph from references between resources (`<a>.id`, `<a>.name`, etc.) and from explicit `depends_on` blocks. The three "steps" in this repo are split across `.tf` files for **readability** — Terraform itself treats them as a single graph. The dependency chain is:
+For each module the pipeline does the same 5 steps.
 
-```
-azurerm_resource_group.rg
-  └─► azurerm_virtual_network.vnet
-        ├─► azurerm_subnet.apim ──► azurerm_network_security_group.apim_nsg
-        │                              └─► azurerm_subnet_network_security_group_association.apim_nsg_assoc
-        │
-        ├─► azurerm_private_dns_zone.apim
-        │     └─► azurerm_private_dns_zone_virtual_network_link.apim
-        │
-        └─► azurerm_subnet.pe                                 ─┐  (Step 1b)
-                                                                │
-   ┌───────── Step 1 ─────────┐                                 │
-   │ azapi_resource.apim      │── needs subnet + NSG + DNS zone │
-   │  (Internal VNet inject)  │                                 │
-   └───────────┬──────────────┘                                 │
-               │                                                │
-               ├─► azurerm_private_dns_a_record.apim_gateway    │
-               │                                                │
-               ├─► azurerm_private_endpoint.apim_mgmt ◄─────────┘
-               │     (PE on Gateway sub-resource, into snet-apim-pe)
-               │
-               ├─► azapi_update_resource.apim_disable_public   (Step 1b — PATCH publicNetworkAccess)
-               │     depends_on = [azurerm_private_endpoint.apim_mgmt]
-               │
-               ├─► azapi_resource.petstore_api                (Step 2 — import OpenAPI)
-               │     depends_on = [azapi_resource.apim]
-               │
-               └─► azapi_resource.petstore_api_policy         (Step 2 — attach policy.xml)
-                     depends_on = [azapi_resource.petstore_api]
-```
+```pwsh
+cd <module-folder>
 
-Key ordering rules enforced by `depends_on`:
+# 1. init (partial backend — values come from CI secrets, NOT committed)
+terraform init `
+  -backend-config="resource_group_name=$env:TFSTATE_RG" `
+  -backend-config="storage_account_name=$env:TFSTATE_SA" `
+  -backend-config="container_name=tfstate" `
+  -backend-config="key=<module>.tfstate"
 
-| Edge | Why |
-|---|---|
-| `apim_disable_public` → `apim_mgmt` (PE) | Azure refuses `publicNetworkAccess=Disabled` until a Private Endpoint exists. Without this edge Terraform might run them in parallel and the PATCH would fail. |
-| `petstore_api` → `apim` | API child resources can't be created before the parent APIM service is fully provisioned. |
-| `petstore_api_policy` → `petstore_api` | Policy is a child of the API. |
-| `apim` → `nsg_assoc`, `dns_link`, `subnet` | APIM creation validates the subnet, its NSG, and that the private DNS zone is linked to the VNet **before** activation. Missing any of these causes a long-running create to fail late. |
+# 2. plan
+terraform plan -out tfplan -var-file=tfvars/$env:ENVIRONMENT.tfvars
 
-### Step 0 — Init
+# 3. (optional) gate / approval
 
-```powershell
-cd apim-premiumv2
-terraform init
+# 4. apply
+terraform apply -auto-approve tfplan
+
+# 5. export outputs for downstream pipelines
+terraform output -json | Out-File outputs.json
 ```
 
-This downloads the `azapi` and `azurerm` providers (versions pinned in [providers.tf](providers.tf)) and writes `.terraform.lock.hcl`.
-
-### Deploy everything
-
-Because every dependency is captured in the graph, a single apply deploys all three steps in the correct order:
-
-```powershell
-terraform plan -out tfplan
-terraform apply tfplan
-```
-
-Total time: ~25–30 min (APIM PremiumV2 activation dominates).
-
-### Verify
-
-```powershell
-$sid  = az account show --query id -o tsv
-$rid  = terraform output -raw apim_resource_id
-$apim = az rest --method get --url "https://management.azure.com$rid?api-version=2024-05-01" -o json | ConvertFrom-Json
-
-[pscustomobject]@{
-  vnetType            = $apim.properties.virtualNetworkType
-  publicNetworkAccess = $apim.properties.publicNetworkAccess
-  privateIPs          = $apim.properties.privateIPAddresses -join ","
-  publicIPs           = ($apim.properties.publicIPAddresses -join ",") | ForEach-Object { if ($_ -eq "") { "(none)" } else { $_ } }
-  peCount             = ($apim.properties.privateEndpointConnections | Measure-Object).Count
-  peState             = $apim.properties.privateEndpointConnections[0].properties.privateLinkServiceConnectionState.status
-} | Format-List
-
-# Petstore API + policy
-az rest --method get --url "https://management.azure.com$rid/apis/petstore?api-version=2024-05-01" `
-  --query "{name:name, path:properties.path, subscriptionRequired:properties.subscriptionRequired, protocols:properties.protocols}" -o json
-
-az rest --method get --url "https://management.azure.com$rid/apis/petstore/policies/policy?api-version=2024-05-01" `
-  --query "properties.value" -o tsv
-```
-
-Expected APIM state:
+## Pipeline dependencies
 
 ```
-vnetType            : Internal
-publicNetworkAccess : Disabled
-privateIPs          : 10.0.1.4
-publicIPs           : (none)
-peCount             : 1
-peState             : Approved
+┌────────────────────────────────┐
+│  apim-premiumv2-private        │   creates APIM, VNet, lockdown
+│  outputs: apim_name, rg, sub   │
+└────────────────────────────────┘
+              │
+              ▼ (apim_name, resource_group_name, subscription_id)
+┌────────────────────────────────┐    ┌───────────────────────────────────┐
+│  import-api-with-policies      │    │  create-mcp-appservice.ps1        │
+│  inputs: APIM coords           │    │  (out-of-band script; creates the │
+│                                │    │   private App Service + PE)       │
+└────────────────────────────────┘    └───────────────────────────────────┘
+                                                  │
+                                                  ▼ (app_service_name + RG)
+                                     ┌───────────────────────────────────┐
+                                     │  import-mcp-from-app-service      │
+                                     │  inputs: APIM coords + AppSvc     │
+                                     └───────────────────────────────────┘
 ```
 
-And `subscriptionRequired = true`, `protocols = ["https"]` on the petstore API.
+`import-api-with-policies` and `import-mcp-from-app-service` are independent —
+they can run in any order (or in parallel) after `apim-premiumv2-private`.
 
-### Call the API (from inside the VNet)
+## `apim-premiumv2-private`
 
-From a jumpbox, bastion, or peered VNet:
+**Required inputs:** `subscription_id`, `apim_name`, `publisher_email`,
+`publisher_name`. Optional: `location`, `resource_group_name`, `vnet_*`,
+`apim_subnet_*`, `pe_subnet_*`, `availability_zones`, `apim_sku_capacity`.
 
-```powershell
-# Without a subscription key — expect HTTP 401
-curl https://apim-premiumv2-ss-26a.azure-api.net/petstore/pet/findByStatus?status=available
+**Outputs (consumed by downstream modules):** `subscription_id`,
+`resource_group_name`, `apim_name`, `apim_resource_id`, `apim_gateway_url`,
+`apim_private_ip`, `vnet_id`, `vnet_name`, `apim_subnet_id`,
+`private_dns_zone_id`.
 
-# With a subscription key from the APIM "All APIs" subscription
-$key = az rest --method post --url "https://management.azure.com$rid/subscriptions/master/listSecrets?api-version=2024-05-01" --query primaryKey -o tsv
-curl -H "Ocp-Apim-Subscription-Key: $key" https://apim-premiumv2-ss-26a.azure-api.net/petstore/pet/findByStatus?status=available
-```
+Expect 30–45 minutes for the initial APIM Premium v2 deployment.
 
----
+## `import-api-with-policies`
 
-## Resulting network exposure
+**Required inputs:**
+- `subscription_id`
+- `resource_group_name` ← from `apim-premiumv2-private` output
+- `apim_name` ← from `apim-premiumv2-private` output
 
-| Surface | Public internet | VNet (or peered) |
-|---|---|---|
-| Gateway `*.azure-api.net` | Blocked (no public IP, no public DNS) | Reachable at private VIP via private DNS |
-| Management API `*.management.azure-api.net` | Blocked (`publicNetworkAccess=Disabled`) | Reachable via PE NIC IP via private DNS |
-| Dev portal / SCM / configuration | Blocked | Reachable via PE NIC IP via private DNS |
-| ARM control plane (`management.azure.com/.../service/...`) | Reachable (RBAC-gated, normal ARM) | Reachable |
+Bundles `petstore-openapi.json` + `policy.xml`. Override with
+`openapi_spec_path` / `policy_xml_path` if you keep the spec elsewhere.
 
-Outbound from APIM is restricted by the NSG to `Storage`, `AzureKeyVault`, and `VirtualNetwork` only — **no arbitrary public egress**.
+## `import-mcp-from-app-service`
 
----
+**Required inputs:**
+- `subscription_id`
+- `resource_group_name`
+- `apim_name`
+- `mcp_app_service_name`
+- `mcp_app_service_resource_group`
 
-## Common gotchas
+**Run order:**
+1. After `apim-premiumv2-private` completes, run
+   `../create-appservice/create-mcp-appservice.ps1` to provision the private
+   App Service. (That folder is git-ignored — it's an out-of-band bootstrap
+   script, not part of the Terraform pipeline.) The script prints the chosen
+   App Service name + RG — capture those and feed them in as variables.
+2. Then `terraform apply`.
 
-- **`AvailabilityZonesNotSupportedInSku`** at create time → your subscription/region doesn't expose PremiumV2 AZs yet. Set `availability_zones = []` in `terraform.tfvars`.
-- **`ServiceSkuActivationThrottled`** → APIM enforces a 60-min cooldown per subscription on PremiumV2 activations. Wait it out.
-- **`ActivateServiceWithPrivateEndpointAccessNotAllowed`** at create time → you tried to set `publicNetworkAccess=Disabled` on create. It must be a post-create PATCH after the PE exists. (This is exactly what Step 1b handles.)
-- **Cannot resolve `*.azure-api.net` from a peered VNet** → you must link the `azure-api.net` private DNS zone to that VNet too.
-- **PE creation fails with subnet error** → the APIM subnet has a delegation, which is incompatible with PEs. The PE goes into the dedicated `snet-apim-pe` subnet, not the APIM subnet.
-- **Spec import succeeded but I expected the NSG to block it** → spec download is performed by the APIM resource provider on the Azure backbone, not by your APIM gateway. The NSG only governs runtime traffic from `snet-apim`, so management-plane imports always succeed regardless of egress rules.
-- **Calls to `/petstore/*` return HTTP 401 even from inside the VNet** → `subscriptionRequired = true` is enforced. Send `Ocp-Apim-Subscription-Key: <key>` (the policy strips it before forwarding to the backend, so the backend never sees it).
+The MCP server projection + tools are created via `az rest` against API version
+`2025-09-01-preview` (the azapi provider's schema doesn't yet recognize
+`type=mcp`). The CI agent must therefore have:
+- Azure CLI installed
+- PowerShell 7+
+- Logged in to Azure (`az login` / service-principal login)
 
----
+## Local-vs-CI tfvars
 
-## Destroy
+`terraform.tfvars.example` in each folder shows the shape. In a real pipeline
+you'll typically:
+- Keep non-secret values in `tfvars/<env>.tfvars` checked into the repo, OR
+- Pass them inline:
+  ```pwsh
+  terraform apply `
+    -var "subscription_id=$env:ARM_SUBSCRIPTION_ID" `
+    -var "apim_name=$env:APIM_NAME" `
+    -var "resource_group_name=$env:RG_NAME"
+  ```
 
-```powershell
-terraform destroy -auto-approve
-```
+## Re-running a module
 
-APIM destroy takes ~10–20 min. The resource group and all networking are removed cleanly.
-
----
-
-## References (Microsoft Learn)
-
-**APIM Premium v2 & VNet injection**
-- [About API Management v2 tiers](https://learn.microsoft.com/azure/api-management/v2-service-tiers-overview)
-- [Use a virtual network with Azure API Management (Premium v2)](https://learn.microsoft.com/azure/api-management/integrate-vnet-outbound)
-- [Deploy your API Management instance to a virtual network — internal mode](https://learn.microsoft.com/azure/api-management/api-management-using-with-internal-vnet)
-- [Virtual network configuration reference (NSG rules, ports, service tags)](https://learn.microsoft.com/azure/api-management/virtual-network-reference)
-- [Subnet delegation — `Microsoft.Web/hostingEnvironments`](https://learn.microsoft.com/azure/virtual-network/subnet-delegation-overview)
-
-**Private Endpoint & public network access**
-- [Connect privately to API Management with a Private Endpoint](https://learn.microsoft.com/azure/api-management/private-endpoint)
-- [Disable public network access to API Management](https://learn.microsoft.com/azure/api-management/private-endpoint#optionally-disable-public-network-access) — documents that this can only be done after creation
-- [Azure Private Endpoint overview](https://learn.microsoft.com/azure/private-link/private-endpoint-overview)
-- [Private Endpoint DNS configuration](https://learn.microsoft.com/azure/private-link/private-endpoint-dns)
-
-**Availability zones**
-- [Availability zone support for API Management](https://learn.microsoft.com/azure/reliability/reliability-api-management) (a.k.a. https://aka.ms/apimaz)
-
-**Terraform providers**
-- [`azapi_resource`](https://registry.terraform.io/providers/Azure/azapi/latest/docs/resources/resource)
-- [`azapi_update_resource`](https://registry.terraform.io/providers/Azure/azapi/latest/docs/resources/update_resource)
-- [`azurerm_private_endpoint`](https://registry.terraform.io/providers/hashicorp/azurerm/latest/docs/resources/private_endpoint)
-- [`azurerm_private_dns_zone`](https://registry.terraform.io/providers/hashicorp/azurerm/latest/docs/resources/private_dns_zone)
-
-**ARM REST reference**
-- [`Microsoft.ApiManagement/service` (2024-05-01)](https://learn.microsoft.com/azure/templates/microsoft.apimanagement/service?pivots=deployment-language-arm-template) — schema for `virtualNetworkType`, `virtualNetworkConfiguration`, `publicNetworkAccess`, `zones`
-
-**API import & policies (Step 2)**
-- [Import an API into Azure API Management](https://learn.microsoft.com/azure/api-management/import-and-publish)
-- [How to set or edit Azure API Management policies](https://learn.microsoft.com/azure/api-management/set-edit-policies)
-- [API Management policy reference](https://learn.microsoft.com/azure/api-management/api-management-policies)
-- [`rate-limit` policy](https://learn.microsoft.com/azure/api-management/rate-limit-policy)
-- [Subscriptions in Azure API Management](https://learn.microsoft.com/azure/api-management/api-management-subscriptions)
-
+All resources are idempotent. The `null_resource` provisioners in
+`import-mcp-from-app-service` use `triggers` so they only re-execute when the
+request body / API version changes. You can re-apply any module at any time
+without affecting the others.

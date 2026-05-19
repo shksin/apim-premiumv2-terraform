@@ -1,0 +1,10 @@
+subscription_id     = "00000000-0000-0000-0000-000000000000"
+resource_group_name = "rg-apim-premiumv2"
+location            = "australiaeast"
+
+apim_name       = "apim-premiumv2-ss-26a"
+publisher_email = "shikhasinha@microsoft.com"
+publisher_name  = "Shikha Sinha"
+
+# Subscription lacks PremiumV2 AZ capability; deploy without zones.
+availability_zones = []

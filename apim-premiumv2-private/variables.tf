@@ -1,3 +1,12 @@
+# ── Subscription / identity ──────────────────────────────────
+
+variable "subscription_id" {
+  description = "Azure subscription ID where resources will be deployed."
+  type        = string
+}
+
+# ── Resource group / location ────────────────────────────────
+
 variable "location" {
   description = "Azure region for all resources."
   type        = string
@@ -10,10 +19,11 @@ variable "resource_group_name" {
   default     = "rg-apim-premiumv2"
 }
 
+# ── APIM ─────────────────────────────────────────────────────
+
 variable "apim_name" {
   description = "Name of the APIM instance. Must be globally unique."
   type        = string
-  default     = "apim-premiumv2-demo"
 }
 
 variable "publisher_email" {
@@ -36,6 +46,14 @@ variable "apim_sku_capacity" {
     error_message = "APIM Premium v2 capacity must be 3."
   }
 }
+
+variable "availability_zones" {
+  description = "Availability zones for the APIM instance. Set to [] if the subscription lacks AZ capability."
+  type        = list(string)
+  default     = ["1", "2", "3"]
+}
+
+# ── Networking ───────────────────────────────────────────────
 
 variable "vnet_name" {
   description = "Name of the Virtual Network."
@@ -61,13 +79,7 @@ variable "apim_subnet_prefix" {
   default     = "10.0.1.0/24"
 }
 
-variable "availability_zones" {
-  description = "Availability zones for the APIM instance."
-  type        = list(string)
-  default     = ["1", "2", "3"]
-}
-
-# ── Management plane lockdown ────────────────────────────────
+# ── Management plane lockdown (Step 1b) ──────────────────────
 
 variable "pe_subnet_name" {
   description = "Name of the subnet hosting the APIM management Private Endpoint."
@@ -79,16 +91,4 @@ variable "pe_subnet_prefix" {
   description = "CIDR for the Private Endpoint subnet. Must NOT have delegation."
   type        = string
   default     = "10.0.2.0/27"
-}
-
-# ── Step 3 ───────────────────────────────────────────────────
-
-variable "mcp_app_service_name" {
-  description = "Name of the existing App Service hosting the MCP server."
-  type        = string
-}
-
-variable "mcp_app_service_resource_group" {
-  description = "Resource group of the existing App Service."
-  type        = string
 }

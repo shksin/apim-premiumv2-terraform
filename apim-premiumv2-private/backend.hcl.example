@@ -1,0 +1,10 @@
+# Fill in your tfstate storage account details, then run:
+#   terraform init -backend-config=backend.hcl
+#
+# In CI/CD, prefer passing these as -backend-config="key=value" flags
+# (so secrets/account names stay out of the repo).
+
+resource_group_name  = "rg-tfstate"
+storage_account_name = "sttfstateapimpremv2"
+container_name       = "tfstate"
+key                  = "apim-premiumv2-private.tfstate"

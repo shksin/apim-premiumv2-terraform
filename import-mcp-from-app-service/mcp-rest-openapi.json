@@ -1,0 +1,67 @@
+{
+  "openapi": "3.0.1",
+  "info": {
+    "title": "MCP REST Backend",
+    "description": "Minimal REST API hosted on a private App Service. Imported into APIM and exposed as an MCP server.",
+    "version": "1.0.0"
+  },
+  "servers": [
+    { "url": "https://placeholder.azurewebsites.net" }
+  ],
+  "paths": {
+    "/api/hello": {
+      "get": {
+        "operationId": "hello",
+        "summary": "Returns a greeting",
+        "description": "Use this tool to get a greeting from the backend. Takes no arguments.",
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "message": { "type": "string" },
+                    "ts":      { "type": "string", "format": "date-time" }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/echo": {
+      "get": {
+        "operationId": "echo",
+        "summary": "Echoes the supplied text back",
+        "description": "Use this tool to echo back a string. Pass the string to echo as the 'text' query parameter.",
+        "parameters": [
+          {
+            "name": "text",
+            "in": "query",
+            "required": true,
+            "schema": { "type": "string" },
+            "description": "The text to echo back."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "youSent": { "type": "string" }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}

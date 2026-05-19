@@ -1,0 +1,4 @@
+resource_group_name  = "rg-tfstate"
+storage_account_name = "sttfstateapimpremv2"
+container_name       = "tfstate"
+key                  = "import-mcp-from-app-service.tfstate"
