@@ -1,4 +1,0 @@
-# Values typically passed by CI from Stage 1's outputs.
-subscription_id     = "00000000-0000-0000-0000-000000000000"
-resource_group_name = "rg-apim-premiumv2"
-apim_name           = "apim-premiumv2-ss-26a"

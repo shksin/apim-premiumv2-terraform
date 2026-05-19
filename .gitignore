@@ -29,5 +29,5 @@ tfplan*
 *.tfplan
 
 # Out-of-band App Service bootstrap scripts (run manually, not in TF pipeline)
-create-appservice/
+scripts/
 

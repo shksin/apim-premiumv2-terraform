@@ -1,0 +1,167 @@
+{
+  "openapi": "3.0.3",
+  "info": {
+    "title": "TODO API",
+    "description": "Minimal in-memory TODO CRUD API hosted on Azure App Service and exposed through APIM.",
+    "version": "1.0.0"
+  },
+  "paths": {
+    "/todos": {
+      "get": {
+        "operationId": "listTodos",
+        "summary": "List all TODO items",
+        "description": "Returns every TODO item currently in the in-memory store.",
+        "tags": ["todos"],
+        "responses": {
+          "200": {
+            "description": "Array of TODO items",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": { "$ref": "#/components/schemas/Todo" }
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "operationId": "createTodo",
+        "summary": "Create a new TODO item",
+        "description": "Adds a new TODO item and returns it with its server-assigned id and creation timestamp.",
+        "tags": ["todos"],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": { "$ref": "#/components/schemas/TodoIn" }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Created",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/Todo" }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/todos/{todo_id}": {
+      "parameters": [
+        {
+          "name": "todo_id",
+          "in": "path",
+          "required": true,
+          "schema": { "type": "string" },
+          "description": "Server-assigned TODO identifier (UUID)."
+        }
+      ],
+      "get": {
+        "operationId": "getTodo",
+        "summary": "Get a single TODO item",
+        "description": "Returns one TODO item by id.",
+        "tags": ["todos"],
+        "responses": {
+          "200": {
+            "description": "TODO item",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/Todo" }
+              }
+            }
+          },
+          "404": { "description": "Todo not found" }
+        }
+      },
+      "put": {
+        "operationId": "updateTodo",
+        "summary": "Update a TODO item",
+        "description": "Partially updates a TODO item; only supplied fields are changed.",
+        "tags": ["todos"],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": { "$ref": "#/components/schemas/TodoUpdate" }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Updated TODO item",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/Todo" }
+              }
+            }
+          },
+          "404": { "description": "Todo not found" }
+        }
+      },
+      "delete": {
+        "operationId": "deleteTodo",
+        "summary": "Delete a TODO item",
+        "description": "Permanently deletes a TODO item by id.",
+        "tags": ["todos"],
+        "responses": {
+          "204": { "description": "Deleted" },
+          "404": { "description": "Todo not found" }
+        }
+      }
+    },
+    "/healthz": {
+      "get": {
+        "operationId": "health",
+        "summary": "Liveness probe",
+        "tags": ["meta"],
+        "responses": {
+          "200": {
+            "description": "ok",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": { "status": { "type": "string", "example": "ok" } }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "TodoIn": {
+        "type": "object",
+        "required": ["title"],
+        "properties": {
+          "title":     { "type": "string", "minLength": 1, "maxLength": 200 },
+          "completed": { "type": "boolean", "default": false }
+        }
+      },
+      "TodoUpdate": {
+        "type": "object",
+        "properties": {
+          "title":     { "type": "string", "minLength": 1, "maxLength": 200 },
+          "completed": { "type": "boolean" }
+        }
+      },
+      "Todo": {
+        "type": "object",
+        "required": ["id", "title", "completed", "created_at"],
+        "properties": {
+          "id":         { "type": "string", "format": "uuid" },
+          "title":      { "type": "string" },
+          "completed":  { "type": "boolean" },
+          "created_at": { "type": "string", "format": "date-time" }
+        }
+      }
+    }
+  }
+}
