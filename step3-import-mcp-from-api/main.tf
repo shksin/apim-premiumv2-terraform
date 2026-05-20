@@ -56,6 +56,9 @@ locals {
   mcp_api_ver  = var.mcp_api_version
   mcp_arm_base = "https://management.azure.com${local.apim_id}/apis/${var.mcp_server_api_name}"
 
+  # 2025-09-01-preview validates "Either BackendId or MCP tools must be set"
+  # at create time. Tools must therefore be embedded inline in the create body;
+  # the per-tool PUTs below then enrich each tool's displayName/description.
   mcp_server_body = jsonencode({
     properties = {
       displayName          = var.mcp_server_api_display_name
@@ -68,6 +71,14 @@ locals {
         transportType = var.mcp_server_transport_type
         endpoints     = { message = { uriTemplate = "/mcp" } }
       }
+      mcpTools = [
+        for op_id in local.source_operation_ids : {
+          name        = op_id
+          displayName = op_id
+          description = lookup(local.source_operation_meta, op_id, op_id)
+          operationId = "/apis/${var.source_api_name}/operations/${op_id}"
+        }
+      ]
     }
   })
 
