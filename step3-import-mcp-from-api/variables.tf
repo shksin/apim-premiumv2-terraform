@@ -25,7 +25,7 @@ variable "source_api_name" {
 variable "source_openapi_path" {
   description = "Path to the OpenAPI 3.x JSON spec for the source API. Used to enumerate operations (one MCP tool per operationId)."
   type        = string
-  default     = "../open-api-spec/open-api-spec.json"
+  default     = "../sample/open-api-spec.json"
 }
 
 # ── MCP server projection ────────────────────────────────────

@@ -83,19 +83,17 @@ an existing backend (e.g. App Service).
 
 ### Prerequisite
 
-1. An **existing backend service URL** (e.g. an Azure App Service) hosting the REST API you want to publish through APIM. That URL goes into:
-   - step 2 as `api_backend_url` — set as the APIM API's `serviceUrl`
-   - step 3 as `source_api_backend_url` — used to create the APIM Backend that the MCP server forwards to
+1. An **existing backend service URL** (e.g. an Azure App Service) hosting the REST API you want to publish through APIM. That URL goes into step 2 as `api_backend_url` — set as the APIM API's `serviceUrl`. Step 3 reuses the same backend via each MCP tool's `operationId` pointing at a source-API operation, so no separate backend URL is needed there.
 
-You also supply your own `open-api-spec/open-api-spec.json` describing the backend's API surface, and optionally a `policy.xml` for step 2.
+You also supply your own `sample/open-api-spec.json` describing the backend's API surface, and optionally a `sample/policy.xml` for step 2.
 
 
 > If your backend lives in a private VNet, make sure APIM's VNet is peered (or otherwise routable) to it before running step 2.
 
 ---
 
-A sample OpenAPI spec ships at the repo root in `open-api-spec/open-api-spec.json`
-(shared with step 3) and a sample policy at `step2-import-api-with-policies/policy.xml`
+A sample OpenAPI spec ships at the repo root in `sample/open-api-spec.json`
+(shared with step 3) and a sample policy at `sample/policy.xml`
 — replace both with your own.
 
 ### Required variables
@@ -117,8 +115,8 @@ A sample OpenAPI spec ships at the repo root in `open-api-spec/open-api-spec.jso
 | `api_description`           | `""`                                     |
 | `api_protocols`             | `["https"]`                              |
 | `api_subscription_required` | `true`                                   |
-| `openapi_spec_path`         | `../open-api-spec/open-api-spec.json`    |
-| `policy_xml_path`           | `policy.xml`                             |
+| `openapi_spec_path`         | `../sample/open-api-spec.json`           |
+| `policy_xml_path`           | `../sample/policy.xml`                   |
 
 ### Run
 
@@ -139,18 +137,20 @@ terraform apply
 ## 2b. `step3-import-mcp-from-api`
 
 Projects an existing REST API in APIM as an **MCP-type API**, with every
-operation in the source OpenAPI spec exposed as an MCP tool. The module
-creates an APIM Backend pointing at the upstream URL and wires the MCP
-API to it.
+operation in the source OpenAPI spec exposed as an MCP tool. Each MCP
+tool's `operationId` references an operation on the source REST API, so
+routing and backend are inherited from that API — no separate APIM
+Backend resource is needed (this matches the portal's "Expose an API as
+an MCP server" wizard).
 
 **Prerequisite:** the source REST API must already exist in APIM
 (typically imported by step 2).
 
 ### How it works
 
-1. Creates an APIM **Backend** resource (`mcp_backend_name`) pointing at `source_api_backend_url`.
-2. Creates an **MCP-type API** (`mcp_server_api_name`) referencing that backend, with `transportType=streamable` and endpoint `/mcp`.
-3. Parses `source_openapi_path` to enumerate every `operationId`, then creates one **MCP tool** per operation, each tool's `operationId` pointing at `/apis/<source_api_name>/operations/<op>`.
+1. Parses `source_openapi_path` to enumerate every `operationId`.
+2. Creates an **MCP-type API** (`mcp_server_api_name`) with `transportType=streamable`, endpoint `/mcp`, and the full set of MCP tools embedded inline in the create body (each tool's `operationId` → `/apis/<source_api_name>/operations/<op>`). Inline tools are required because `2025-09-01-preview` validates *"Either BackendId or MCP tools must be set"* at create time.
+3. Issues a follow-up PUT for each tool sub-resource to set its `displayName` and `description` from the OpenAPI `summary`/`description`.
 
 MCP-specific resources are PUT via `az rest @ 2025-09-01-preview` (wrapped in `null_resource` with a 5× retry on transient ARM 502s) since the azapi schema doesn't yet cover `type=mcp`.
 
@@ -161,10 +161,8 @@ MCP-specific resources are PUT via `az rest @ 2025-09-01-preview` (wrapped in `n
 | `subscription_id`             | Same subscription as the APIM instance                                            |
 | `resource_group_name`         | RG containing the APIM instance (from step 1)                                     |
 | `apim_name`                   | APIM instance name (from step 1)                                                  |
-| `source_api_name`             | APIM resource name of the existing REST API to project                            |
-| `source_api_backend_url`      | Upstream URL the MCP server forwards to                                           |
+| `source_api_name`             | APIM resource name of the existing REST API to project (e.g. `todo`)              |
 | `mcp_server_api_name`         | APIM resource name for the MCP-type API                                           |
-| `mcp_backend_name`            | APIM Backend resource name                                                        |
 | `mcp_server_api_path`         | URL suffix — `https://{apim}.azure-api.net/{mcp_server_api_path}`                 |
 | `mcp_server_api_display_name` | Portal display name                                                               |
 
@@ -172,7 +170,7 @@ MCP-specific resources are PUT via `az rest @ 2025-09-01-preview` (wrapped in `n
 
 | Variable                      | Default                                  |
 | ----------------------------- | ---------------------------------------- |
-| `source_openapi_path`         | `../open-api-spec/open-api-spec.json`    |
+| `source_openapi_path`         | `../sample/open-api-spec.json`           |
 | `mcp_server_api_description`  | `""`                                     |
 | `mcp_server_transport_type`   | `streamable` (only supported value)      |
 | `mcp_api_version`             | `2025-09-01-preview`                     |
@@ -191,7 +189,7 @@ Requires Azure CLI + PowerShell 7 + `az login` on the machine running `terraform
 
 ### Outputs
 
-`mcp_server_api_id`, `mcp_server_url`, `mcp_server_endpoint`, `mcp_backend_url`, `mcp_tool_count`, `mcp_tool_names`.
+`mcp_server_api_id`, `mcp_server_url`, `mcp_server_endpoint`, `mcp_tool_count`, `mcp_tool_names`.
 
 **Note**: because module 1's second apply disables APIM public network access, the MCP endpoint (`https://{apim}.azure-api.net/todo-mcp/mcp`) is reachable only from inside the VNet (or via a peered network / VPN / Private Endpoint).
 

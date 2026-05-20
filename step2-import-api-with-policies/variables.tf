@@ -58,13 +58,13 @@ variable "api_subscription_required" {
 # ── Spec / policy file paths (consumer-supplied) ─────────────
 
 variable "openapi_spec_path" {
-  description = "Path to the OpenAPI 3.x JSON spec file (relative to this module). Typically points at ../open-api-spec/open-api-spec.json so step 2 and step 3 share the same file."
+  description = "Path to the OpenAPI 3.x JSON spec file (relative to this module). Typically points at ../sample/open-api-spec.json so step 2 and step 3 share the same file."
   type        = string
-  default     = "../open-api-spec/open-api-spec.json"
+  default     = "../sample/open-api-spec.json"
 }
 
 variable "policy_xml_path" {
-  description = "Path to the APIM policy XML file (relative to this module). A sample policy.xml ships at the module root — replace with your own."
+  description = "Path to the APIM policy XML file (relative to this module). A sample policy.xml ships at ../sample/policy.xml — replace with your own."
   type        = string
-  default     = "policy.xml"
+  default     = "../sample/policy.xml"
 }
