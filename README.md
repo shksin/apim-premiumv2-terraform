@@ -9,13 +9,13 @@ Each module persists its Terraform state to an Azure Storage blob via the `azure
 1. Use an existing Storage Account or create a new one to store Terraform state
 2. Make sure the identity running `terraform init` / `apply` has **Storage Blob Data Contributor** on the storage account (the backend uses Azure AD auth).
    
-3. Each step  declare the remote backend inline in their `providers.tf`. The values are placeholders (`xxx`) — **before running `terraform init`, edit the `backend "azurerm"` block in each module's `providers.tf`** and fill in `resource_group_name`, `storage_account_name`, `container_name`, and `key`. Use a **distinct `key`** per module (e.g. `step1-apim-premiumv2-private.tfstate`, `step2-import-api-with-policies.tfstate`, `step3-import-mcp-from-api.tfstate`) so each module gets its own state blob.
+3. Each step  declare the remote backend inline in their `providers.tf`. The values are placeholders (`xxx`) — **before running `terraform init`, edit the `backend "azurerm"` block in each module's `providers.tf`** and fill in `resource_group_name`, `storage_account_name`, `container_name`, and `key`. Use a **distinct `key`** per module (e.g. `step1-apim-premiumv2-vnet-injected.tfstate`, `step2-import-api-with-policies.tfstate`, `step3-import-mcp-from-api.tfstate`) so each module gets its own state blob.
 
 
 
 ---
 
-## 1. `step1-apim-premiumv2-private`
+## 1. `step1-apim-premiumv2-vnet-injected`
 
 ### Prerequisite
 
@@ -58,7 +58,7 @@ Deploys APIM Premium v2 with Internal VNet injection and a management-plane Priv
 ### Run
 
 ```pwsh
-cd step1-apim-premiumv2-private
+cd step1-apim-premiumv2-vnet-injected
 cp terraform.tfvars.example terraform.tfvars   # then edit
 
 terraform init

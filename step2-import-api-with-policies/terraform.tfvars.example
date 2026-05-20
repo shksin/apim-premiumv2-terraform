@@ -1,7 +1,7 @@
 # ── Target APIM (from step 1 outputs) ────────────────────────
 subscription_id     = "00000000-0000-0000-0000-000000000000"
 resource_group_name = "rg-apim-premiumv2"
-apim_name           = "apim-premiumv2-ss-26a"
+apim_name           = "apim-premiumv2"
 
 # ── API definition ───────────────────────────────────────────
 api_name         = "todo"
@@ -15,10 +15,10 @@ api_description  = "TODO CRUD API imported from a local OpenAPI 3.0 spec."
 api_backend_url = "https://todo-api-xxxx.azurewebsites.net"
 
 # ── Spec / policy files (optional — defaults shown) ────────
-# Spec lives in the root open-api-spec/ folder so it can be shared with step 3.
+# Spec lives in the root sample/ folder so it can be shared with step 3.
 # Replace open-api-spec.json with your own OpenAPI 3.x file, and policy.xml with your own policy.
-# openapi_spec_path = "../open-api-spec/open-api-spec.json"
-# policy_xml_path   = "policy.xml"
+# openapi_spec_path = "../sample/open-api-spec.json"
+# policy_xml_path   = "../sample/policy.xml"
 
 # Optional overrides:
 # api_protocols             = ["https"]

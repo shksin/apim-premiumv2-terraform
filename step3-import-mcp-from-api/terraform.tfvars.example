@@ -1,12 +1,12 @@
 # ── Target APIM (from step 1 outputs) ────────────────────────
 subscription_id     = "00000000-0000-0000-0000-000000000000"
 resource_group_name = "rg-apim-premiumv2"
-apim_name           = "apim-premiumv2-ss-26a"
+apim_name           = "apim-premiumv2"
 
 # ── Source REST API (must already exist in APIM) ─────────────
 # Same values used by step 2 — the API to project as an MCP server.
 source_api_name        = "todo"
-# source_openapi_path  = "../open-api-spec/open-api-spec.json"  # optional, default shown
+# source_openapi_path  = "../sample/open-api-spec.json"  # optional, default shown
 
 # ── MCP server projection ────────────────────────────────────
 mcp_server_api_name         = "todo-mcp"
