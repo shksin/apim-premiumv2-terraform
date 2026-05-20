@@ -8,7 +8,7 @@ output "subscription_id" {
 
 output "resource_group_name" {
   description = "Resource group containing APIM."
-  value       = azurerm_resource_group.rg.name
+  value       = data.azurerm_resource_group.rg.name
 }
 
 output "apim_name" {
@@ -18,7 +18,7 @@ output "apim_name" {
 
 output "apim_resource_id" {
   description = "Full ARM resource ID of the APIM instance."
-  value       = azapi_resource.apim.id
+  value       = module.apim.resource_id
 }
 
 output "apim_gateway_url" {
@@ -27,26 +27,27 @@ output "apim_gateway_url" {
 }
 
 output "apim_private_ip" {
-  description = "Private IP address of the APIM gateway."
-  value       = azapi_resource.apim.output.properties.privateIPAddresses[0]
+  description = "Private IP address of the APIM gateway (internal load balancer VIP)."
+  value       = module.apim.resource.private_ip_addresses[0]
+  sensitive   = true
 }
 
 output "vnet_id" {
   description = "Resource ID of the VNet."
-  value       = azurerm_virtual_network.vnet.id
+  value       = data.azurerm_virtual_network.vnet.id
 }
 
 output "vnet_name" {
   description = "Name of the VNet (consumed by the App Service script for stage 3)."
-  value       = azurerm_virtual_network.vnet.name
+  value       = data.azurerm_virtual_network.vnet.name
 }
 
 output "apim_subnet_id" {
   description = "Resource ID of the APIM subnet."
-  value       = azurerm_subnet.apim.id
+  value       = data.azurerm_subnet.apim.id
 }
 
 output "private_dns_zone_id" {
   description = "Resource ID of the azure-api.net private DNS zone."
-  value       = azurerm_private_dns_zone.apim.id
+  value       = data.azurerm_private_dns_zone.apim.id
 }

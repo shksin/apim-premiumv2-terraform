@@ -6,12 +6,10 @@ apim_name           = "apim-premiumv2-ss-26a"
 # ── Source REST API (must already exist in APIM) ─────────────
 # Same values used by step 2 — the API to project as an MCP server.
 source_api_name        = "todo"
-source_api_backend_url = "https://todo-api-xxxx.azurewebsites.net"
 # source_openapi_path  = "../open-api-spec/open-api-spec.json"  # optional, default shown
 
 # ── MCP server projection ────────────────────────────────────
 mcp_server_api_name         = "todo-mcp"
-mcp_backend_name            = "todo-backend"
 mcp_server_api_path         = "todo-mcp"
 mcp_server_api_display_name = "TODO (MCP server)"
 mcp_server_api_description  = "MCP server projection of the TODO REST API. Each operation is exposed as an MCP tool."

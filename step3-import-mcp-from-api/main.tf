@@ -5,12 +5,14 @@
 # APIM — imported by step 2 (step2-import-api-with-policies).
 #
 # Resources created here:
-#   1. APIM Backend pointing at the source API's upstream URL
-#      (required: MCP API's backendId must reference a Backend entity)
-#   2. MCP-type API (type=mcp) — created via `az rest` since the
+#   1. MCP-type API (type=mcp) — created via `az rest` since the
 #      azapi schema doesn't yet cover MCP-specific properties
-#   3. One MCP tool per operation in the source API (auto-discovered
-#      from the OpenAPI spec used during stage 2 import)
+#   2. One MCP tool per operation in the source API (auto-discovered
+#      from the OpenAPI spec used during stage 2 import). Each tool's
+#      operationId references the existing source API operation, so
+#      routing/backend is inherited from that API — no separate Backend
+#      resource is needed (matches the portal's "Expose an API as an
+#      MCP server" wizard, which is tools-only).
 # ═══════════════════════════════════════════════════════════════
 
 locals {
@@ -40,20 +42,6 @@ locals {
   }
 }
 
-# ── APIM Backend pointing at the upstream service URL ────────
-resource "azapi_resource" "mcp_backend" {
-  type      = "Microsoft.ApiManagement/service/backends@2024-05-01"
-  name      = var.mcp_backend_name
-  parent_id = local.apim_id
-
-  body = {
-    properties = {
-      url      = var.source_api_backend_url
-      protocol = "http"
-    }
-  }
-}
-
 # ── MCP server API + tools (driven via az rest @ 2025-09-01-preview) ──
 # Why az rest instead of azapi_resource?
 #   1. `type = "mcp"` on Microsoft.ApiManagement/service/apis and the
@@ -76,7 +64,6 @@ locals {
       protocols            = ["https"]
       subscriptionRequired = true
       type                 = "mcp"
-      backendId            = azapi_resource.mcp_backend.name
       mcpProperties = {
         transportType = var.mcp_server_transport_type
         endpoints     = { message = { uriTemplate = "/mcp" } }
@@ -120,8 +107,6 @@ resource "null_resource" "mcp_server_api" {
       if ($code -ne 0) { throw "az rest PUT ${var.mcp_server_api_name} failed (exit $code)" }
     EOT
   }
-
-  depends_on = [azapi_resource.mcp_backend]
 }
 
 resource "null_resource" "mcp_tool" {

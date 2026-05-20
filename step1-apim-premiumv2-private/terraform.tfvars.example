@@ -1,6 +1,15 @@
+# Pre-requisite: run scripts/create-network/deploy.ps1 first to provision
+# the resource group, VNet, subnets, NSG and private DNS zone.
+
 subscription_id     = "00000000-0000-0000-0000-000000000000"
 resource_group_name = "rg-apim-premiumv2"
-location            = "australiaeast"
+location            = "centralus"
+
+# Existing networking (defaults match scripts/create-network/deploy.ps1)
+vnet_name             = "vnet-apim"
+apim_subnet_name      = "snet-apim"
+pe_subnet_name        = "snet-apim-pe"
+private_dns_zone_name = "azure-api.net"
 
 apim_name       = "apim-premiumv2-ss-26a"
 publisher_email = "shikhasinha@microsoft.com"

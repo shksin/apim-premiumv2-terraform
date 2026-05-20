@@ -13,11 +13,6 @@ output "mcp_server_endpoint" {
   value       = "https://${var.apim_name}.azure-api.net/${var.mcp_server_api_path}/mcp"
 }
 
-output "mcp_backend_url" {
-  description = "Upstream URL the MCP server forwards to."
-  value       = var.source_api_backend_url
-}
-
 output "mcp_tool_count" {
   description = "Number of MCP tools created (one per operation in the source API)."
   value       = length(local.source_operation_ids)

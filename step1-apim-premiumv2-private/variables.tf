@@ -5,16 +5,15 @@ variable "subscription_id" {
   type        = string
 }
 
-# ── Resource group / location ────────────────────────────────
+# ── Existing resource group / location ───────────────────────
 
 variable "location" {
-  description = "Azure region for all resources."
+  description = "Azure region. Must match the region of the pre-existing VNet."
   type        = string
-  default     = "australiaeast"
 }
 
 variable "resource_group_name" {
-  description = "Name of the resource group."
+  description = "Name of the existing resource group that contains the VNet."
   type        = string
 }
 
@@ -47,47 +46,35 @@ variable "apim_sku_capacity" {
 }
 
 variable "availability_zones" {
-  description = "Availability zones for the APIM instance. Set to [] if the subscription lacks AZ capability."
+  description = "Availability zones for the APIM instance. Set to [] if the subscription / region lacks AZ capability."
   type        = list(string)
   default     = ["1", "2", "3"]
 }
 
-# ── Networking ───────────────────────────────────────────────
-
-variable "vnet_name" {
-  description = "Name of the Virtual Network."
-  type        = string
-  default     = "vnet-apim"
+variable "public_network_access_enabled" {
+  description = "Whether the APIM management plane is reachable from the public internet. Leave UNSET on the first apply so the AVM module's default applies (Azure rejects Disabled at create time for Internal VNet injection). On a subsequent apply pass `-var=public_network_access_enabled=false` to lock down the management plane to the Private Endpoint."
+  type        = bool
+  default     = null
 }
 
-variable "vnet_address_space" {
-  description = "Address space for the VNet."
+# ── Existing networking  ──
+
+variable "vnet_name" {
+  description = "Name of the existing VNet."
   type        = string
-  default     = "10.0.0.0/16"
 }
 
 variable "apim_subnet_name" {
-  description = "Name of the APIM subnet."
+  description = "Name of the existing APIM subnet (delegated to Microsoft.Web/hostingEnvironments)."
   type        = string
-  default     = "snet-apim"
 }
-
-variable "apim_subnet_prefix" {
-  description = "CIDR for the APIM subnet. Minimum /27, recommended /24."
-  type        = string
-  default     = "10.0.1.0/24"
-}
-
-# ── Management plane lockdown (Step 1b) ──────────────────────
 
 variable "pe_subnet_name" {
-  description = "Name of the subnet hosting the APIM management Private Endpoint."
+  description = "Name of the existing subnet hosting the APIM management Private Endpoint."
   type        = string
-  default     = "snet-apim-pe"
 }
 
-variable "pe_subnet_prefix" {
-  description = "CIDR for the Private Endpoint subnet. Must NOT have delegation."
+variable "private_dns_zone_name" {
+  description = "Name of the existing private DNS zone for APIM (azure-api.net)."
   type        = string
-  default     = "10.0.2.0/27"
 }

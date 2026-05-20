@@ -1,129 +1,59 @@
 # APIM Premium v2 — Terraform deployment
 
-Three Terraform modules with their own state. Run them in order.
 
-```
-step1-apim-premiumv2-private/          # 1. Platform: APIM Premium v2 + VNet + management lockdown
-step2-import-api-with-policies/        # 2. Import a REST API into APIM + apply policy
-step3-import-mcp-from-api/             # 3. Project the imported API as an MCP server (all operations exposed as tools)
-```
 
-## What you need before you start
 
-You only need one thing of your own: an **existing backend service URL** (e.g. an Azure App Service, Container App, or any HTTPS endpoint) that hosts the REST API you want to publish through APIM. That URL goes into:
+## Prerequisite: To run Terraform scripts
 
-- step 2 as `api_backend_url` — set as the APIM API's `serviceUrl`
-- step 3 as `source_api_backend_url` — used to create the APIM Backend that the MCP server forwards to
-
-Everything else (resource group, VNet, APIM, private endpoints, the imported API, and the MCP projection) is created by these modules. You also supply your own `open-api-spec/open-api-spec.json` describing the backend's API surface, and optionally a `policy.xml` for step 2.
-
-**Run order:**
-
-1. `step1-apim-premiumv2-private` (Terraform) — creates the resource group, VNet, APIM Premium v2, private DNS, management Private Endpoint.
-2. `step2-import-api-with-policies` (Terraform) — imports your REST API into APIM from `open-api-spec/open-api-spec.json`; set `api_backend_url` to your backend.
-3. `step3-import-mcp-from-api` (Terraform) — projects the imported API as an MCP-type API, exposing each operation as an MCP tool.
-
-> If your backend lives in a private VNet, make sure APIM's VNet is peered (or otherwise routable) to it before running step 2.
-
----
-
-## Prerequisite: Terraform state backend
-
-Each module persists its Terraform state to an Azure Storage blob via the `azurerm` backend. This is what lets you:
-
-- **Re-run safely from any machine / CI agent** — state isn't trapped in someone's local folder.
-- **Run the three modules independently** — each module writes a separate `*.tfstate` blob (with its own lease/lock), so 2a and 2b can be applied in parallel without stepping on each other or on module 1.
-- **Avoid losing state** — local `terraform.tfstate` is easy to delete or forget to check in; the storage account is durable and versioned.
-
-All three modules declare the remote backend inline in their `providers.tf`. The values are placeholders (`xxx`) — **before running `terraform init`, edit the `backend "azurerm"` block in each module's `providers.tf`** and fill in `resource_group_name`, `storage_account_name`, `container_name`, and `key`. Use a **distinct `key`** per module (e.g. `step1-apim-premiumv2-private.tfstate`, `step2-import-api-with-policies.tfstate`, `step3-import-mcp-from-api.tfstate`) so each module gets its own state blob.
-
-> **Why not use variables here?** Terraform does not allow variables, locals, or any interpolation inside a `backend` block — values must be literal. The backend is initialized before variables are evaluated. The only alternatives are `-backend-config=key=value` flags or a `-backend-config=*.hcl` file passed to `terraform init`, which we deliberately removed in favour of keeping the settings in source.
-
-### Option A — Use an existing storage account
-
-1. Update `resource_group_name`, `storage_account_name`, `container_name` in each module's `providers.tf` `backend "azurerm"` block.
+Each module persists its Terraform state to an Azure Storage blob via the `azurerm` backend:
+1. Use an existing Storage Account or create a new one to store Terraform state
 2. Make sure the identity running `terraform init` / `apply` has **Storage Blob Data Contributor** on the storage account (the backend uses Azure AD auth).
-3. The container must already exist; create it once if needed:
+   
+3. Each step  declare the remote backend inline in their `providers.tf`. The values are placeholders (`xxx`) — **before running `terraform init`, edit the `backend "azurerm"` block in each module's `providers.tf`** and fill in `resource_group_name`, `storage_account_name`, `container_name`, and `key`. Use a **distinct `key`** per module (e.g. `step1-apim-premiumv2-private.tfstate`, `step2-import-api-with-policies.tfstate`, `step3-import-mcp-from-api.tfstate`) so each module gets its own state blob.
 
-   ```pwsh
-   az storage container create -n <container> --account-name <storage-account> --auth-mode login
-   ```
 
-### Option B — Create a new storage account
-
-```pwsh
-az group create -n rg-tfstate -l australiaeast
-az storage account create -n sttfstateapimpremv2 -g rg-tfstate -l australiaeast --sku Standard_LRS
-az storage container create -n tfstate --account-name sttfstateapimpremv2 --auth-mode login
-```
-
-Storage account names must be globally unique and 3–24 lowercase alphanumeric characters — pick your own if `sttfstateapimpremv2` is taken.
-
----
-
-## Passing variables to Terraform
-
-Each module declares its inputs in `variables.tf` and ships a `terraform.tfvars.example`. There are several ways to supply values — use whichever fits your workflow:
-
-| Method                          | When to use                                                                                  |
-| ------------------------------- | -------------------------------------------------------------------------------------------- |
-| `terraform.tfvars` file         | **Default for local runs.** Copy `terraform.tfvars.example` → `terraform.tfvars`, then edit. Auto-loaded by Terraform. **Gitignored.** |
-| `*.auto.tfvars` files           | Same auto-loading behaviour; useful when you want to split values across multiple files.     |
-| `-var-file=path.tfvars`         | Explicitly point at a tfvars file. Handy for per-environment files (`dev.tfvars`, `prod.tfvars`). |
-| `-var "name=value"`             | One-off overrides on the CLI.                                                                |
-| `TF_VAR_<name>` env vars        | CI / pipeline-friendly. Example: `$env:TF_VAR_apim_name = "apim-foo"`.                       |
-| Interactive prompt              | If a required variable has no value supplied, Terraform will prompt at `plan` / `apply`.     |
-
-**Recommended flow:**
-
-```pwsh
-cd <step-folder>
-cp terraform.tfvars.example terraform.tfvars   # then edit values
-terraform init
-terraform plan      # review changes
-terraform apply
-```
-
-**CI / non-interactive:** prefer `TF_VAR_*` env vars (or `-var-file`) so secrets/values aren't checked into the repo:
-
-```pwsh
-$env:TF_VAR_subscription_id    = (az account show --query id -o tsv)
-$env:TF_VAR_resource_group_name = "rg-apim-premiumv2"
-$env:TF_VAR_apim_name          = "apim-premiumv2-foo"
-terraform apply -auto-approve
-```
-
-> `terraform.tfvars`, `*.auto.tfvars`, and `*.tfstate*` are all gitignored. Only `terraform.tfvars.example` is checked in.
 
 ---
 
 ## 1. `step1-apim-premiumv2-private`
 
-Creates the resource group, VNet, NSG, private DNS zone, the APIM Premium v2 instance (Internal VNet injection), the management-plane Private Endpoint, and disables public network access. Expect ~30–45 min for the initial deploy.
+### Prerequisite
+
+**Pre-existing networking** in the target subscription / region:
+   - A resource group
+   - A VNet with **three subnets**:
+     - APIM injection subnet (e.g. `snet-apim`, /24 recommended) — must have an NSG with the rules required by APIM Premium v2 ([reference](https://learn.microsoft.com/en-us/azure/api-management/inject-vnet-v2)).
+     - Private Endpoint subnet (e.g. `snet-apim-pe`, /27)
+   - A private DNS zone `azure-api.net` linked to that VNet
+
+Deploys APIM Premium v2 with Internal VNet injection and a management-plane Private Endpoint via the [Azure Verified Module](https://registry.terraform.io/modules/Azure/avm-res-apimanagement-service/azurerm) `Azure/avm-res-apimanagement-service/azurerm`. Consumes your pre-existing RG, VNet, subnets, and `azure-api.net` private DNS zone via data sources.
+
+> **Two-apply process.** Azure rejects `publicNetworkAccess=Disabled` at *create* time for APIM with Internal VNet injection — it is only accepted on *update*. So step 1 runs `terraform apply` twice: first without setting `public_network_access_enabled` (the AVM module's default applies, leaving public access enabled at create time), then again with `-var=public_network_access_enabled=false` to lock down the management plane.
+>
+> Expect ~20–25 min for the create, ~5 min for the lockdown.
 
 ### Required variables
 
-| Variable              | Description                                  |
-| --------------------- | -------------------------------------------- |
-| `subscription_id`     | Azure subscription ID                        |
-| `resource_group_name` | Name of the resource group to create         |
-| `apim_name`           | Globally unique APIM instance name           |
-| `publisher_email`     | Publisher email for the APIM instance        |
-| `publisher_name`      | Publisher display name                       |
+| Variable                | Description                                          |
+| ----------------------- | ---------------------------------------------------- |
+| `subscription_id`       | Azure subscription ID                                |
+| `location`              | Azure region (must match the pre-existing network)   |
+| `resource_group_name`   | Existing RG containing the VNet                      |
+| `apim_name`             | Globally unique APIM instance name                   |
+| `publisher_email`       | Publisher email for the APIM instance                |
+| `publisher_name`        | Publisher display name                               |
+| `vnet_name`             | Name of the existing VNet (e.g. `vnet-apim`)         |
+| `apim_subnet_name`      | APIM injection subnet name (e.g. `snet-apim`)        |
+| `pe_subnet_name`        | Private Endpoint subnet name (e.g. `snet-apim-pe`)   |
+| `private_dns_zone_name` | Private DNS zone for APIM (e.g. `azure-api.net`)     |
 
 ### Optional variables (with defaults)
 
-| Variable              | Default            |
-| --------------------- | ------------------ |
-| `location`            | `australiaeast`    |
-| `apim_sku_capacity`   | `3`                |
-| `availability_zones`  | `["1","2","3"]`    |
-| `vnet_name`           | `vnet-apim`        |
-| `vnet_address_space`  | `10.0.0.0/16`      |
-| `apim_subnet_name`    | `snet-apim`        |
-| `apim_subnet_prefix`  | `10.0.1.0/24`      |
-| `pe_subnet_name`      | `snet-apim-pe`     |
-| `pe_subnet_prefix`    | `10.0.2.0/27`      |
+| Variable                        | Default                                              |
+| ------------------------------- | ---------------------------------------------------- |
+| `apim_sku_capacity`             | `3`                                                  |
+| `availability_zones`            | `["1","2","3"]`                                      |
+| `public_network_access_enabled` | unset (AVM module default — only set on pass 2)      |
 
 ### Run
 
@@ -132,7 +62,12 @@ cd step1-apim-premiumv2-private
 cp terraform.tfvars.example terraform.tfvars   # then edit
 
 terraform init
-terraform apply
+
+# Pass 1 — create APIM (public access enabled by Azure requirement)
+terraform apply -auto-approve
+
+# Pass 2 — lock down the management plane to the Private Endpoint
+terraform apply -auto-approve -var="public_network_access_enabled=false"
 ```
 
 ### Outputs
@@ -141,11 +76,23 @@ terraform apply
 
 ---
 
-## 2a. `step2-import-api-with-policies`
+## 2. `step2-import-api-with-policies`
 
-Imports a REST API into APIM from a **consumer-supplied** OpenAPI 3.x JSON
-spec and applies an API-level policy. The API's `serviceUrl` points at
-the consumer's existing backend (e.g. App Service).
+Imports a REST API into APIM from an OpenAPI 3.x spec and applies an API-level policy. The API's `serviceUrl` points at
+an existing backend (e.g. App Service).
+
+### Prerequisite
+
+1. An **existing backend service URL** (e.g. an Azure App Service) hosting the REST API you want to publish through APIM. That URL goes into:
+   - step 2 as `api_backend_url` — set as the APIM API's `serviceUrl`
+   - step 3 as `source_api_backend_url` — used to create the APIM Backend that the MCP server forwards to
+
+You also supply your own `open-api-spec/open-api-spec.json` describing the backend's API surface, and optionally a `policy.xml` for step 2.
+
+
+> If your backend lives in a private VNet, make sure APIM's VNet is peered (or otherwise routable) to it before running step 2.
+
+---
 
 A sample OpenAPI spec ships at the repo root in `open-api-spec/open-api-spec.json`
 (shared with step 3) and a sample policy at `step2-import-api-with-policies/policy.xml`
@@ -246,7 +193,7 @@ Requires Azure CLI + PowerShell 7 + `az login` on the machine running `terraform
 
 `mcp_server_api_id`, `mcp_server_url`, `mcp_server_endpoint`, `mcp_backend_url`, `mcp_tool_count`, `mcp_tool_names`.
 
-Note: because module 1 disables APIM public network access, the MCP endpoint (`https://{apim}.azure-api.net/todo-mcp/mcp`) is reachable only from inside the VNet (or via a peered network / VPN / Private Endpoint).
+**Note**: because module 1's second apply disables APIM public network access, the MCP endpoint (`https://{apim}.azure-api.net/todo-mcp/mcp`) is reachable only from inside the VNet (or via a peered network / VPN / Private Endpoint).
 
 ---
 

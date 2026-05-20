@@ -21,8 +21,6 @@ override.tf.json
 *_override.tf
 *_override.tf.json
 
-# Ad-hoc REST payloads
-body.json
 
 # Terraform plan binaries
 tfplan*
@@ -31,3 +29,4 @@ tfplan*
 # Out-of-band App Service bootstrap scripts (run manually, not in TF pipeline)
 scripts/
 
+*.log

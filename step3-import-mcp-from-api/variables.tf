@@ -22,11 +22,6 @@ variable "source_api_name" {
   type        = string
 }
 
-variable "source_api_backend_url" {
-  description = "Upstream URL the MCP server should call (e.g. App Service URL). Used to create an APIM Backend resource."
-  type        = string
-}
-
 variable "source_openapi_path" {
   description = "Path to the OpenAPI 3.x JSON spec for the source API. Used to enumerate operations (one MCP tool per operationId)."
   type        = string
@@ -37,11 +32,6 @@ variable "source_openapi_path" {
 
 variable "mcp_server_api_name" {
   description = "APIM resource name of the MCP-type API."
-  type        = string
-}
-
-variable "mcp_backend_name" {
-  description = "APIM Backend resource name. Referenced by the MCP API's backendId."
   type        = string
 }
 
